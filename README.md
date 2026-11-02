@@ -1,5 +1,7 @@
 # Signal
 
+![Signal: self-hosted monitoring for Laravel apps](docs/banner.png)
+
 Self-hosted monitoring for Laravel apps: servers (CPU, RAM, disk, load), stack versions (OS, PHP, Laravel, Composer), exceptions, logs, requests and queued jobs, in one dashboard.
 
 - **Dashboard**: this Laravel 12 + Inertia + React app.
