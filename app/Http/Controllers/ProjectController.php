@@ -4,17 +4,24 @@ namespace App\Http\Controllers;
 
 use App\Models\Host;
 use App\Models\Project;
+use App\Models\RequestRecord;
 use App\Queries\Telemetry;
 use App\Security\SecurityReport;
 use App\Support\HostPresenter;
 use App\Support\Period;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
 use Inertia\Response;
 
 class ProjectController extends Controller
 {
+    /**
+     * Bars in the requests sparkline of the projects table; two dashboard buckets each.
+     */
+    protected const TREND_BARS = 30;
+
     /**
      * All projects with their health at a glance.
      */
@@ -37,6 +44,7 @@ class ProjectController extends Controller
         $latest = HostPresenter::latestVersions(Host::all());
         $components = SecurityReport::components();
         $security = SecurityReport::byProject($components);
+        $trends = $this->requestTrends();
 
         return Inertia::render('projects/index', [
             'security' => SecurityReport::summary($components),
@@ -53,9 +61,44 @@ class ProjectController extends Controller
                 'requests_24h' => $project->requests_24h,
                 'server_errors_24h' => $project->server_errors_24h,
                 'unresolved_exceptions' => $project->unresolved_exceptions,
+                'requests_trend' => $trends[$project->id] ?? array_fill(0, self::TREND_BARS, [0, 0]),
                 'hosts' => $project->hosts->map(fn (Host $host) => HostPresenter::present($host, $latest))->values(),
             ]),
         ]);
+    }
+
+    /**
+     * Requests and server errors over the last 24 hours, as [total, 5xx] pairs per bar, keyed by project id.
+     *
+     * @return array<int, list<array{0: int, 1: int}>>
+     */
+    protected function requestTrends(): array
+    {
+        $period = new Period('24h');
+        $bucket = $period->bucketExpression('recorded_at')->getValue(DB::connection()->getQueryGrammar());
+        $trends = [];
+
+        $rows = RequestRecord::query()
+            ->where('recorded_at', '>=', $period->start)
+            ->where('recorded_at', '<', $period->end)
+            ->select([
+                'project_id',
+                DB::raw("{$bucket} as bucket"),
+                DB::raw('COUNT(*) as total'),
+                DB::raw('SUM(CASE WHEN status >= 500 THEN 1 ELSE 0 END) as errors'),
+            ])
+            ->groupBy('project_id', 'bucket')
+            ->get();
+
+        foreach ($rows as $row) {
+            $bar = min(self::TREND_BARS - 1, intdiv((int) $row->bucket, intdiv(Period::BUCKETS, self::TREND_BARS)));
+
+            $trends[$row->project_id] ??= array_fill(0, self::TREND_BARS, [0, 0]);
+            $trends[$row->project_id][$bar][0] += (int) $row->total;
+            $trends[$row->project_id][$bar][1] += (int) $row->errors;
+        }
+
+        return $trends;
     }
 
     /**

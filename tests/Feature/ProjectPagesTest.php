@@ -69,6 +69,25 @@ class ProjectPagesTest extends TestCase
         $this->get("/projects/{$project->slug}/exceptions/{$group->id}")->assertInertia(fn (Assert $page) => $page->component('exceptions/show'));
     }
 
+    public function test_the_projects_table_gets_a_24_hour_request_trend()
+    {
+        $this->actingAs(User::factory()->create());
+
+        $project = Project::factory()->create();
+        $request = fn ($status, $at) => ['method' => 'GET', 'route' => '/', 'status' => $status, 'duration_ms' => 5, 'recorded_at' => $at->toIso8601String()];
+
+        $this->withToken($project->issueToken())->postJson('/api/ingest', [
+            'host' => ['hostname' => 'web-01'],
+            'requests' => [$request(200, now()), $request(500, now()), $request(200, now()->subHours(23)), $request(200, now()->subDays(2))],
+        ])->assertAccepted();
+
+        $this->get('/projects')->assertInertia(fn (Assert $page) => $page
+            ->has('projects.0.requests_trend', 30)
+            ->where('projects.0.requests_trend.29', [2, 1])
+            ->where('projects.0.requests_24h', 3)
+            ->where('projects.0.requests_trend', fn ($trend) => collect($trend)->sum(0) === 3));
+    }
+
     public function test_exception_groups_can_be_resolved()
     {
         $this->actingAs(User::factory()->create());
